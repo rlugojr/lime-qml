@@ -289,9 +289,6 @@ ApplicationWindow {
                 minimapVisible: false
                 height: 100
               }
-
-            // }
-
         }
     }
     OpenDialog {

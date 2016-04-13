@@ -20,14 +20,11 @@ import (
 	"github.com/limetext/lime-backend/lib/log"
 	"github.com/limetext/lime-backend/lib/render"
 	_ "github.com/limetext/lime-backend/lib/sublime"
-	"github.com/limetext/lime-backend/lib/textmate"
 	"github.com/limetext/lime-backend/lib/util"
 	. "github.com/limetext/text"
 )
 
-var (
-	scheme *textmate.Theme
-)
+var scheme backend.ColorScheme
 
 const (
 	batching_enabled = true
@@ -64,7 +61,7 @@ func (t *qmlfrontend) Show(v *backend.View, r Region) {
 
 func (t *qmlfrontend) VisibleRegion(v *backend.View) Region {
 	// TODO
-	return Region{0, v.Buffer().Size()}
+	return Region{0, v.Size()}
 }
 
 func (t *qmlfrontend) StatusMessage(msg string) {
@@ -148,10 +145,10 @@ func (t *qmlfrontend) DefaultFg() color.RGBA {
 // Called when a new view is opened
 func (t *qmlfrontend) onNew(v *backend.View) {
 	fv := &frontendView{bv: v}
-	v.Buffer().AddObserver(fv)
+	v.AddObserver(fv)
 	v.Settings().AddOnChange("blah", fv.onChange)
 
-	fv.Title.Text = v.Buffer().FileName()
+	fv.Title.Text = v.FileName()
 	if len(fv.Title.Text) == 0 {
 		fv.Title.Text = "untitled"
 	}
@@ -190,7 +187,7 @@ func (t *qmlfrontend) onLoad(v *backend.View) {
 		}
 	}
 	v2 := w2.views[i]
-	v2.Title.Text = v.Buffer().FileName()
+	v2.Title.Text = v.FileName()
 	tabs := w2.window.ObjectByName("tabs")
 	tabs.Set("currentIndex", w2.ActiveViewIndex())
 	tab := tabs.Call("getTab", i).(qml.Object)
@@ -274,30 +271,39 @@ func (t *qmlfrontend) Quit() (err error) {
 }
 
 func (t *qmlfrontend) loop() (err error) {
-	backend.OnNew.Add(t.onNew)
-	backend.OnClose.Add(t.onClose)
-	backend.OnLoad.Add(t.onLoad)
-	backend.OnSelectionModified.Add(t.onSelectionModified)
-
-	ed := backend.GetEditor()
-	ed.SetFrontend(t)
-	ed.LogInput(false)
-	ed.LogCommands(false)
-	c := ed.Console()
-	t.Console = &frontendView{bv: c}
-	c.Buffer().AddObserver(t.Console)
-	c.Buffer().AddObserver(t)
-
-	ed.AddPackagesPath("shipped", "../packages")
-	ed.AddPackagesPath("default", "../packages/Default")
-	ed.AddPackagesPath("user", "../packages/User")
-
 	var (
 		engine    *qml.Engine
 		component qml.Object
 		// WaitGroup keeping track of open windows
 		wg sync.WaitGroup
 	)
+
+	backend.OnNew.Add(t.onNew)
+	backend.OnClose.Add(t.onClose)
+	backend.OnLoad.Add(t.onLoad)
+	backend.OnSelectionModified.Add(t.onSelectionModified)
+	backend.OnNewWindow.Add(func(w *backend.Window) {
+		fw := &frontendWindow{bw: w}
+		t.windows[w] = fw
+		if component != nil {
+			fw.launch(&wg, component)
+		}
+	})
+
+	ed := backend.GetEditor()
+	ed.Init()
+	ed.AddPackagesPath("shipped", "../packages")
+	ed.AddPackagesPath("default", "../packages/Default")
+	ed.AddPackagesPath("user", "../packages/User")
+	ed.SetFrontend(t)
+	ed.LogInput(false)
+	ed.LogCommands(false)
+	c := ed.Console()
+	t.Console = &frontendView{bv: c}
+	c.AddObserver(t.Console)
+	c.AddObserver(t)
+
+	scheme = ed.GetColorScheme(ed.Settings().Get("color_scheme", "").(string))
 
 	// create and setup a new engine, destroying
 	// the old one if one exists.
@@ -331,28 +337,8 @@ func (t *qmlfrontend) loop() (err error) {
 		log.Error(err)
 	}
 
-	backend.OnNewWindow.Add(func(w *backend.Window) {
-		fw := &frontendWindow{bw: w}
-		t.windows[w] = fw
-		if component != nil {
-			fw.launch(&wg, component)
-		}
-	})
-
-	// TODO: should be done backend side
-	if sc, err := textmate.LoadTheme("../packages/TextMate-Themes/Monokai.tmTheme"); err != nil {
-		log.Error(err)
-	} else {
-		scheme = sc
-	}
-
-	ed.Init()
-
-	// TODO: setting syntax should be done automaticly in backend and after
-	// implementing this we could run Init in a go routine and remove the
-	// next two line
-	v := ed.ActiveWindow().OpenFile("main.go", 0)
-	v.SetSyntaxFile("../packages/go-tmbundle/Syntaxes/Go.tmLanguage")
+	w := ed.NewWindow()
+	w.OpenFile("main.go", 0)
 
 	defer func() {
 		fmt.Println(util.Prof)
