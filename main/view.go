@@ -12,11 +12,11 @@ import (
 
 	"gopkg.in/qml.v1"
 
-	"github.com/limetext/lime-backend/lib"
-	"github.com/limetext/lime-backend/lib/log"
-	"github.com/limetext/lime-backend/lib/render"
-	"github.com/limetext/lime-backend/lib/util"
+	"github.com/limetext/backend"
+	"github.com/limetext/backend/log"
+	"github.com/limetext/backend/render"
 	. "github.com/limetext/text"
+	"github.com/limetext/util"
 )
 
 // A helper glue structure connecting the backend View with the qml code that
@@ -191,7 +191,7 @@ func (fv *frontendView) formatLine(line int) {
 		}
 		return
 	}
-	recipie := fv.bv.Transform(scheme, vr).Transcribe()
+	recipie := fv.bv.Transform(vr).Transcribe()
 	highlight_line := false
 	if b, ok := fv.bv.Settings().Get("highlight_line", highlight_line).(bool); ok {
 		highlight_line = b
