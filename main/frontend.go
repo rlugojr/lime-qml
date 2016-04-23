@@ -165,7 +165,7 @@ func (t *qmlfrontend) onClose(v *backend.View) {
 	w2 := t.windows[v.Window()]
 	for i := range w2.views {
 		if w2.views[i].bv == v {
-			w2.window.ObjectByName("tabs").Call("removeTab", i)
+			w2.window.Call("removeTab", i)
 			copy(w2.views[i:], w2.views[i+1:])
 			w2.views = w2.views[:len(w2.views)-1]
 			return
@@ -185,10 +185,10 @@ func (t *qmlfrontend) onLoad(v *backend.View) {
 	}
 	v2 := w2.views[i]
 	v2.Title.Text = v.FileName()
-	tabs := w2.window.ObjectByName("tabs")
-	tabs.Set("currentIndex", w2.ActiveViewIndex())
-	tab := tabs.Call("getTab", i).(qml.Object)
-	tab.Set("title", v2.Title.Text)
+	if w2.window != nil {
+		w2.window.Call("activateTab", w2.ActiveViewIndex())
+		w2.window.Call("setTabTitle", i, v2.Title.Text)
+	}
 }
 
 func (t *qmlfrontend) onSelectionModified(v *backend.View) {
@@ -204,6 +204,21 @@ func (t *qmlfrontend) onSelectionModified(v *backend.View) {
 		return
 	}
 	v2.qv.Call("onSelectionModified")
+}
+
+func (t *qmlfrontend) onStatusChanged(v *backend.View) {
+	w2 := t.windows[v.Window()]
+	i := 0
+	for i = range w2.views {
+		if w2.views[i].bv == v {
+			break
+		}
+	}
+	v2 := w2.views[i]
+	if v2.qv == nil {
+		return
+	}
+	v2.qv.Call("onStatusChanged")
 }
 
 // Launches the provided command in a new goroutine
@@ -348,6 +363,7 @@ func (t *qmlfrontend) loop() (err error) {
 	backend.OnLoad.Add(t.onLoad)
 	backend.OnSelectionModified.Add(t.onSelectionModified)
 	backend.OnNewWindow.Add(addWindow)
+	backend.OnStatusChanged.Add(t.onStatusChanged)
 
 	// we need to add windows and views that are added before we registered
 	// actions for OnNewWindow, OnNew, ... events
@@ -385,14 +401,21 @@ func (t *qmlfrontend) loop() (err error) {
 		// reloadRequested = true
 		// t.Quit()
 
+		lastTime := time.Now()
+
 		for {
-			time.Sleep(1 * time.Second) // quitting too frequently causes crashes
 
 			select {
 			case ev := <-watch.Events:
+				if time.Now().Sub(lastTime) < 1*time.Second {
+					// quitting too frequently causes crashes
+					lastTime = time.Now()
+					continue
+				}
 				if strings.HasSuffix(ev.Name, ".qml") && ev.Op == fsnotify.Write && ev.Op != fsnotify.Chmod && !reloadRequested && waiting {
 					reloadRequested = true
 					t.Quit()
+					lastTime = time.Now()
 				}
 			}
 		}

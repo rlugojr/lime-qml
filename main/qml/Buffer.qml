@@ -32,10 +32,60 @@ Item {
     property var tabWidth: spaceWidth * 4
     property var lineHeight: fontMetrics.lineSpacing
 
+    property var lineNumbersWidth: fontMetrics.advanceWidth(''+(myView? myView.lines() : "0"))
     onEditorFontChanged: {
       editorRoot.spaceWidth = fontMetrics.advanceWidth(' ');
     }
 
+    Component {
+      id: gutterComponent
+      Row {
+        // id: gutter
+        // width: childrenRect.width + 25
+        height: lineHeight + 2
+        // property string lineNumberText: "0"
+        clip: true
+
+
+        Text {
+          id: lineNumber
+          width: lineNumbersWidth
+          height: parent.height
+
+          text: lineNumberText
+          color: "white"
+        }
+
+        Item {
+          // spacing
+          width: 10
+          height: 10
+        }
+
+        Rectangle {
+          width: 1
+          height: parent.height
+
+          color: "white"
+        }
+
+        Item {
+          // spacing
+          width: 10
+          height: 10
+        }
+      }
+    }
+
+    Loader {
+      id: gutterTest
+      visible: false
+      sourceComponent: gutterComponent
+      property string lineNumberText: "0"
+    }
+
+
+    property var gutterWidth: gutterTest.childrenRect.width
 
     function measureChunk(chunk) {
       var ctext = chunk.text;
@@ -78,6 +128,14 @@ Item {
             width: parent.width
             height: lineHeight
 
+            Loader {
+              id: gutter
+              sourceComponent: gutterComponent
+              width: gutterWidth
+
+              property string lineNumberText: index+1
+            }
+
             Canvas {
               id: canvas
               property var line: myView && index > -1 ? myView.line(index) : null
@@ -91,7 +149,10 @@ Item {
               // property var spaceWidth: fontMetrics.advanceWidth(' ')
               // property var tabWidth: spaceWidth * 4
 
-              width: parent.width
+              anchors {
+                left: gutter.right
+                right: parent.right
+              }
               height: lineHeight + 2
 
 
@@ -99,11 +160,14 @@ Item {
                 var l = line;
                 if (l == null) return;
 
+                var startTime = new Date().getTime();
+
                 var drawTabs = false;
 
                 var tabWidth = editorRoot.tabWidth;
 
                 var ctx = canvas.getContext("2d");
+                ctx.reset();
 
                 ctx.font = editorFont;
 
@@ -152,6 +216,12 @@ Item {
                 }
 
                 l.width = x;
+
+                var endTime = new Date().getTime();
+
+                var duration = endTime - startTime;
+                // console.log("Paint took", duration);
+                reportPaint(duration);
               }
             }
           }
@@ -195,6 +265,11 @@ Item {
 
                 var fullWidth = line.width;
 
+                mouseX -= gutterWidth;
+                if (mouseX <= 0) {
+                  return 0;
+                }
+
 
                 // if the click was farther right than the last character of
                 // the line then return the last character's column
@@ -207,6 +282,7 @@ Item {
 
                 // Trying to find closest column to clicked position
                 var len = line.chunksLen();
+                if (len == 0) return 0;
                 var ci = 0;
                 var partialWidth = 0;
                 var partialCol = 0;
@@ -560,8 +636,8 @@ Item {
         var line = myView.line(rowcol[0]);
 
         var len = line.chunksLen();
-        if (len == 0) return 0;
-        var partialWidth = 0;
+        var partialWidth = gutterWidth;
+        if (len == 0) return partialWidth;
         var partialCol = 0;
         var ci = 0;
         var chunk;
@@ -602,6 +678,31 @@ Item {
         return partialWidth + cursorOffset;
 
     }
+
+    property int numPaints: 0
+    property real totalDuration: 0
+
+    function reportPaint(duration) {
+      numPaints += 1;
+      totalDuration += duration;
+
+      // paintTimer.running = true;
+    }
+
+    // Timer {
+    //   id: paintTimer
+    //     interval: 100
+    //     repeat: false
+    //     running: false
+    //     onTriggered: {
+    //         if (numPaints == 0) return;
+    //
+    //         console.log("Paints", numPaints, "in the last", interval, ", total", totalDuration, "average", totalDuration / numPaints);
+    //
+    //         numPaints = 0;
+    //         totalDuration = 0;
+    //     }
+    // }
 
 
     function resetBlink() {
