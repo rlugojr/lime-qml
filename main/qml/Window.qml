@@ -1,11 +1,9 @@
 import QtQuick 2.0
 import QtQuick.Controls 1.0
 import QtQuick.Controls.Styles 1.0
-import QtQuick.Dialogs 1.0
+import QtQuick.Dialogs 1.2
 import QtQuick.Layouts 1.0
 import QtGraphicalEffects 1.0
-
-import "dialogs"
 
 ApplicationWindow {
     id: window
@@ -17,36 +15,23 @@ ApplicationWindow {
     property string themeFolder: "../../packages/Soda/Soda Dark"
 
     function view() {
-      var tab = tabs.getTab(tabs.currentIndex);
-       return tab === undefined ? undefined : tab.item;
+      return mainView.view();
     }
 
     function addTab(title, view) {
-      var tab = tabs.addTab(title, tabTemplate);
-      console.log("addTab", tab, tab.item);
-
-      var loadTab = function() {
-        tab.item.myView = view;
-      }
-
-      if (tab.item != null) {
-        loadTab();
-      } else {
-        tab.loaded.connect(loadTab);
-      }
-      tab.active = true;
+      return mainView.addTab(view);
     }
 
     function activateTab(tabIndex) {
-      tabs.currentIndex = tabIndex;
+      return mainView.activateTab(tabIndex);
     }
 
     function removeTab(tabIndex) {
-      tabs.removeTab(tabIndex);
+      return mainView.removeTab(tabIndex);
     }
 
     function setTabTitle(tabIndex, title) {
-      tabs.getTab(tabIndex).title = title;
+      return mainView.setTabTitle(tabIndex, title);
     }
 
     menuBar: MenuBar {
@@ -59,7 +44,7 @@ ApplicationWindow {
             }
             MenuItem {
                 text: qsTr("Open File...")
-                onTriggered: openDialog.open();
+                onTriggered: frontend.runCommand("prompt_open_file");
             }
             MenuItem {
                 text: qsTr("Save")
@@ -95,7 +80,8 @@ ApplicationWindow {
             MenuSeparator{}
             MenuItem {
                 text: qsTr("Quit")
-                onTriggered: Qt.quit(); // frontend.runCommand("quit");
+            		// TODO: frontend.runCommand("quit");
+            		onTriggered: Qt.quit();
             }
         }
         Menu {
@@ -162,12 +148,12 @@ ApplicationWindow {
         }
     }
 
-    property Tab currentTab: tabs.count == 0? null : tabs.getTab(tabs.currentIndex)
-    property var statusBarMap: currentTab == null || currentTab.item == null ? null : tabs.getTab(tabs.currentIndex).item.statusBar
+    property Tab currentTab: mainView.currentTab()
+    property var statusBarMap: (currentTab == null || currentTab.item == null) ? null : currentTab.item.statusBar
     property var statusBarSorted: []
     onStatusBarMapChanged: {
       if (statusBarMap == null) {
-        statusBarSorted = [];
+        statusBarSorted = [["a", "git branch: master"], ["b", "INSERT MODE"], ["c", "Line xx, Column yy"]];
         return;
       }
 
@@ -177,7 +163,7 @@ ApplicationWindow {
       console.log("status bar keys:", keys);
       var sorted = [];
       for (var i = 0; i < keys.length; i++)
-        sorted.push(statusBarMap[keys[i]]);
+        sorted.push([keys[i], statusBarMap[keys[i]]]);
 
       statusBarSorted = sorted;
     }
@@ -205,25 +191,9 @@ ApplicationWindow {
                   model: statusBarSorted
                   delegate:
                     Label {
-                        text: modelData
+                        text: modelData[1]
                         color: statusBar.textColor
                     }
-
-                }
-                Label {
-                    text: "git branch: master"
-                    color: statusBar.textColor
-                }
-
-                Label {
-                    text: "INSERT MODE"
-                    color: statusBar.textColor
-                }
-
-                Label {
-                    id: statusBarCaretPos
-                    text: "Line xx, Column yy"
-                    color: statusBar.textColor
                 }
             }
 
@@ -266,48 +236,8 @@ ApplicationWindow {
         SplitView {
             anchors.fill: parent
             orientation: Qt.Vertical
-              TabView {
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                id: tabs
-                objectName: "tabs"
-                style: TabViewStyle {
-                    frameOverlap: 0
-                    tab: Item {
-                        implicitWidth: 180
-                        implicitHeight: 28
-                        ToolTip {
-                            backgroundColor: "#BECCCC66"
-                            textColor: "black"
-                            font.pointSize: 8
-                            text: (styleData.title != "") ? styleData.title : "untitled"
-                            Component.onCompleted: {
-                                this.parent = tabs;
-                            }
-                        }
-                        BorderImage {
-                            source: themeFolder + (styleData.selected ? "/tab-active.png" : "/tab-inactive.png")
-                            border { left: 5; top: 5; right: 5; bottom: 5 }
-                            width: 180
-                            height: 25
-                            Text {
-                                id: tab_title
-                                anchors.centerIn: parent
-                                text: (styleData.title != "") ? styleData.title.replace(/^.*[\\\/]/, '') : "untitled"
-                                color: frontend.defaultFg()
-                                anchors.verticalCenterOffset: 1
-                            }
-                        }
-                    }
-                    tabBar: Image {
-                        fillMode: Image.TileHorizontally
-                        source: themeFolder + "/tabset-background.png"
-                    }
-                    tabsMovable: true
-                    frame: Rectangle { color: frontend.defaultBg() }
-                    tabOverlap: 5
-                }
-
+              MainView {
+                id: mainView
               }
               View {
                 id: consoleView
@@ -318,7 +248,10 @@ ApplicationWindow {
               }
         }
     }
-    OpenDialog {
-        id: openDialog
+    MessageDialog {
+        objectName: "messageDialog"
+    }
+    FileDialog {
+        objectName: "fileDialog"
     }
 }
