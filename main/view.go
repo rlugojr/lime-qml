@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/limetext/backend"
 	"github.com/limetext/backend/render"
@@ -17,16 +18,41 @@ import (
 // A helper glue structure connecting the backend View with the qml code that
 // then ends up rendering it.
 type view struct {
+	id             int
 	bv             *backend.View
 	qv             qml.Object
 	FormattedLines *linesList
-	Title          lineStruct
+	Title          string
 }
 
 func newView(bv *backend.View) *view {
 	v := &view{
-		bv: bv,
+		id:    int(bv.Id()),
+		bv:    bv,
+		Title: bv.FileName(),
 	}
+	if len(v.Title) == 0 {
+		v.Title = "untitled"
+	}
+	bv.AddObserver(v)
+	bv.Settings().AddOnChange("qml.view.syntax", v.onChange)
+	bv.Settings().AddOnChange("qml.view.syntaxfile", func(name string) {
+		if name != "syntax" {
+			return
+		}
+		syn := bv.Settings().String("syntax", "Plain Text")
+		syntax := backend.GetEditor().GetSyntax(syn)
+		w := fe.windows[bv.Window()]
+		w.qw.Call("setSyntaxStatus", syntax.Name())
+	})
+	bv.Settings().AddOnChange("qml.view.tabSize", func(name string) {
+		if name != "tab_size" {
+			return
+		}
+		ts := bv.Settings().Int("tab_size", 4)
+		w := fe.windows[bv.Window()]
+		w.qw.Call("setIndentStatus", strconv.Itoa(ts))
+	})
 	return v
 }
 
@@ -71,11 +97,13 @@ func (v *view) Fix(obj qml.Object) {
 
 	})
 
-	if v.bv.Size() > 0 {
-		r := Region{A: 0, B: v.bv.Size()}
-		v.Inserted(nil, r, v.bv.SubstrR(r))
-		return
-	}
+	r := Region{A: 0, B: v.bv.Size()}
+	v.Inserted(nil, r, v.bv.SubstrR(r))
+}
+
+// SetActive is called from QML when the active tab is set to this view
+func (v *view) SetActive() {
+	v.bv.Window().SetActiveView(v.bv)
 }
 
 func (v *view) Erased(changed_buffer Buffer, region_removed Region, data_removed []rune) {
@@ -156,7 +184,6 @@ func (v *view) formatLine(linenum int, line *lineStruct) {
 	defer prof.Exit()
 
 	vr := v.bv.Line(v.bv.TextPoint(linenum, 0))
-
 	if vr.Size() == 0 {
 		if line.Text != "" {
 			line.Text = ""
@@ -166,10 +193,6 @@ func (v *view) formatLine(linenum int, line *lineStruct) {
 		return
 	}
 	recipie := v.bv.Transform(vr).Transcribe()
-	highlight_line := false
-	if b, ok := v.bv.Settings().Get("highlight_line", highlight_line).(bool); ok {
-		highlight_line = b
-	}
 	lastEnd := vr.Begin()
 
 	chunks := line.Chunks

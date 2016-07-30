@@ -14,8 +14,15 @@ import (
 // A helper glue structure connecting the backend Window with the qml.Window
 type window struct {
 	bw    *backend.Window
-	views []*view
 	qw    *qml.Window
+	views map[*backend.View]*view
+}
+
+func newWindow(bw *backend.Window) *window {
+	return &window{
+		bw:    bw,
+		views: make(map[*backend.View]*view),
+	}
 }
 
 // Instantiates a new window, and launches a new goroutine waiting for it
@@ -33,28 +40,6 @@ func (w *window) launch(wg *sync.WaitGroup, component qml.Object) {
 	}()
 }
 
-func (w *window) View(idx int) *view {
-	return w.views[idx]
-}
-
-func (w *window) ActiveViewIndex() int {
-	for i, v := range w.views {
-		if v.bv == w.bw.ActiveView() {
-			return i
-		}
-	}
-	return 0
-}
-
 func (w *window) Back() *backend.Window {
 	return w.bw
-}
-
-func (w *window) findView(bv *backend.View) (*view, int) {
-	for i, v := range w.views {
-		if v.bv == bv {
-			return v, i
-		}
-	}
-	return nil, -1
 }

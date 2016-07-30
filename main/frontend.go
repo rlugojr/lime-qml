@@ -37,27 +37,33 @@ const (
 	keypad_mod = 0x20000000
 )
 
-// keeping track of frontend state
-type frontend struct {
-	status_message string
-	lock           sync.Mutex
-	windows        map[*backend.Window]*window
-	Console        *view
-	qmlDispatch    chan qmlDispatch
-}
+type (
+	// keeping track of frontend state
+	frontend struct {
+		lock        sync.Mutex
+		windows     map[*backend.Window]*window
+		Console     *view
+		qmlDispatch chan qmlDispatch
 
-// Used for batching qml.Changed calls
-type qmlDispatch struct{ value, field interface{} }
+		promptWaitGroup sync.WaitGroup
+		promptResult    string
+	}
+
+	// Used for batching qml.Changed calls
+	qmlDispatch struct{ value, field interface{} }
+)
 
 var fe *frontend
 
 func initFrontend() {
-	fe = &frontend{windows: make(map[*backend.Window]*window)}
+	fe = &frontend{
+		windows: make(map[*backend.Window]*window),
+	}
 	go fe.qmlBatchLoop()
 	qml.Run(fe.loop)
 }
 
-func (f *frontend) Window(w *backend.Window) *window {
+func (f *frontend) window(w *backend.Window) *window {
 	return f.windows[w]
 }
 
@@ -71,9 +77,12 @@ func (f *frontend) VisibleRegion(bv *backend.View) Region {
 }
 
 func (f *frontend) StatusMessage(msg string) {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	f.status_message = msg
+	w := f.windows[backend.GetEditor().ActiveWindow()]
+	w.qw.Call("setFrontendStatus", msg)
+	go func() {
+		time.Sleep(5 * time.Second)
+		w.qw.Call("setFrontendStatus", "")
+	}()
 }
 
 const (
@@ -87,7 +96,7 @@ const (
 	cancelButton = 4194304
 )
 
-func (f *frontend) message(text string, icon, btns int) (ret int) {
+func (f *frontend) message(text string, icon, btns int) string {
 	cbs := make(map[string]int)
 	if btns&okButton != 0 {
 		cbs["accepted"] = 1
@@ -102,18 +111,12 @@ func (f *frontend) message(text string, icon, btns int) (ret int) {
 	obj.Set("icon", icon)
 	obj.Set("standardButtons", btns)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	for key, r := range cbs {
-		obj.On(key, func() {
-			ret = r
-			wg.Done()
-		})
-	}
+	f.promptWaitGroup.Add(1)
 	obj.Call("open")
-	wg.Wait()
-	log.Fine("returning %d from dialog", ret)
-	return
+	f.promptWaitGroup.Wait()
+
+	log.Fine("returning %d from dialog", f.promptResult)
+	return f.promptResult
 }
 
 func (f *frontend) ErrorMessage(msg string) {
@@ -126,31 +129,26 @@ func (f *frontend) MessageDialog(msg string) {
 }
 
 func (f *frontend) OkCancelDialog(msg, ok string) bool {
-	return f.message(msg, questionIcon, okButton|cancelButton) == 1
+	return f.message(msg, questionIcon, okButton|cancelButton) == "accepted"
 }
 
 func (f *frontend) Prompt(title, folder string, flags int) []string {
 	w := f.windows[backend.GetEditor().ActiveWindow()]
 	obj := w.qw.ObjectByName("fileDialog")
 	obj.Set("title", title)
-	obj.Set("folder", folder)
-	if flags&backend.SaveAs != 0 {
-		obj.Set("selectExisting", false)
-	}
-	if flags&backend.OnlyFolder != 0 {
-		obj.Set("selectFolder", true)
-	}
-	if flags&backend.SelectMultiple != 0 {
-		obj.Set("selectMultiple", true)
-	}
+	obj.Set("folder", "file://"+folder)
+	obj.Set("selectExisting", flags&backend.PROMPT_SAVE_AS == 0)
+	obj.Set("selectFolder", flags&backend.PROMPT_ONLY_FOLDER == 1)
+	obj.Set("selectMultiple", flags&backend.PROMPT_SELECT_MULTIPLE == 1)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	obj.On("accepted", wg.Done)
-	obj.On("rejected", wg.Done)
+	f.promptWaitGroup.Add(1)
 	obj.Call("open")
+	f.promptWaitGroup.Wait()
 
-	wg.Wait()
+	if f.promptResult != "accepted" {
+		return nil
+	}
+
 	res := obj.List("fileUrls")
 	files := make([]string, res.Len())
 	res.Convert(&files)
@@ -161,6 +159,11 @@ func (f *frontend) Prompt(title, folder string, flags int) []string {
 	}
 	log.Fine("Selected %s files", files)
 	return files
+}
+
+func (f *frontend) PromptClosed(result string) {
+	f.promptResult = result
+	f.promptWaitGroup.Done()
 }
 
 func (f *frontend) scroll(b Buffer) {
@@ -208,65 +211,55 @@ func (f *frontend) qmlChanged(value, field interface{}) {
 }
 
 func (f *frontend) DefaultBg() color.RGBA {
-	c := f.ColorScheme().Spice(&render.ViewRegions{})
+	c := f.colorScheme().Spice(&render.ViewRegions{})
 	c.Background.A = 0xff
 	return color.RGBA(c.Background)
 }
 
 func (f *frontend) DefaultFg() color.RGBA {
-	c := f.ColorScheme().Spice(&render.ViewRegions{})
+	c := f.colorScheme().Spice(&render.ViewRegions{})
 	c.Foreground.A = 0xff
 	return color.RGBA(c.Foreground)
 }
 
 // Called when a new view is opened
 func (f *frontend) onNew(bv *backend.View) {
-	v := newView(bv)
-	bv.AddObserver(v)
-	bv.Settings().AddOnChange("qml.view.syntax", v.onChange)
-
-	v.Title.Text = bv.FileName()
-	if len(v.Title.Text) == 0 {
-		v.Title.Text = "untitled"
-	}
-
 	w := f.windows[bv.Window()]
-	w.views = append(w.views, v)
-
+	v := newView(bv)
+	w.views[bv] = v
 	if w.qw != nil {
-		w.qw.Call("addTab", "", v)
-		w.qw.Call("activateTab", w.ActiveViewIndex())
+		w.qw.Call("addTab", v.id, v)
+		w.qw.Call("activateTab", v.id)
 	}
 }
 
 // called when a view is closed
 func (f *frontend) onClose(bv *backend.View) {
 	w := f.windows[bv.Window()]
-	_, i := w.findView(bv)
-	if i == -1 {
+	v := w.views[bv]
+	if v == nil {
 		log.Error("Couldn't find closed view...")
 		return
 	}
-	w.qw.Call("removeTab", i)
-	copy(w.views[i:], w.views[i+1:])
-	w.views = w.views[:len(w.views)-1]
+	w.qw.Call("removeTab", v.id)
+	delete(w.views, bv)
 }
 
 // called when a view has loaded
 func (f *frontend) onLoad(bv *backend.View) {
 	w := f.windows[bv.Window()]
-	v, i := w.findView(bv)
+	v := w.views[bv]
 	if v == nil {
 		log.Error("Couldn't find loaded view")
 		return
 	}
-	v.Title.Text = bv.FileName()
-	w.qw.Call("setTabTitle", i, v.Title.Text)
+	v.Title = bv.FileName()
+	w.qw.Call("setTabTitle", v.id, v.Title)
 }
 
 func (f *frontend) onSelectionModified(bv *backend.View) {
 	w := f.windows[bv.Window()]
-	v, _ := w.findView(bv)
+	v := w.views[bv]
 	if v == nil {
 		log.Error("Couldn't find modified view")
 		return
@@ -279,7 +272,7 @@ func (f *frontend) onSelectionModified(bv *backend.View) {
 
 func (f *frontend) onStatusChanged(bv *backend.View) {
 	w := f.windows[bv.Window()]
-	v, _ := w.findView(bv)
+	v := w.views[bv]
 	if v == nil {
 		log.Error("Couldn't find status changed view")
 		return
@@ -338,9 +331,9 @@ func (f *frontend) HandleInput(text string, keycode int, modifiers int) bool {
 	return false
 }
 
-func (f *frontend) ColorScheme() backend.ColorScheme {
+func (f *frontend) colorScheme() backend.ColorScheme {
 	ed := backend.GetEditor()
-	return ed.GetColorScheme(ed.Settings().Get("color_scheme", "").(string))
+	return ed.GetColorScheme(ed.Settings().String("color_scheme", ""))
 }
 
 // Quit closes all open windows to de-reference all qml objects
@@ -418,7 +411,7 @@ func (f *frontend) loop() (err error) {
 	}
 
 	addWindow := func(bw *backend.Window) {
-		w := &window{bw: bw}
+		w := newWindow(bw)
 		f.windows[bw] = w
 		w.launch(&wg, component)
 	}
@@ -526,11 +519,10 @@ func (f *frontend) loop() (err error) {
 		for _, w := range f.windows {
 			w.launch(&wg, component)
 
-			for i, bv := range w.Back().Views() {
+			for _, bv := range w.Back().Views() {
 				f.onNew(bv)
 				f.onLoad(bv)
 
-				w.View(i)
 			}
 		}
 	}
