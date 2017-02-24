@@ -14,36 +14,41 @@ Item {
   property var cols: [0.0, 0.25, 0.75, 1.0]
   property var cells: [[0, 0, 2, 3]] //[[0, 0, 1, 2], [1, 0, 2, 1], [0, 2, 1, 3], [1, 1, 2, 3]]
 
-  property var cellObjects: []
-
   property var tabsMap: ({})
 
-
-  function currentCell() {
-    // TODO: Handle current cell?
-    var cellItem = cellHolder.itemAt(0);
-    if (cellItem == null) return null;
-    return cellItem;
+  Component {
+      id: tabTemplate
+      Item {}
   }
 
-  function currentTab() {
-    var cell = currentCell();
-    if (cell == null) return null;
-    return cell.getTab(cell.currentIndex);
+  Component {
+    id: viewTemplate
+    View {
+      id: tabView
+      anchors.fill: parent
+    }
   }
 
-  function view() {
-    var tab = currentTab();
-     return tab === undefined ? undefined : tab.item;
+  property alias cellCount: cellHolder.count
+  onCellCountChanged: {
+    // TODO: Actually track current cell!
+    currentCell = cellHolder.itemAt(0);
+  }
+
+  property Cell currentCell: cellHolder.itemAt(0)
+  property Tab currentTab: currentCell && currentCell.currentTab
+  property View currentView: currentCell && currentCell.currentView
+
+  function getViewFromTab(tab) {
+    return tab? tab.item.view : undefined;
   }
 
   function addTab(tabId, view) {
-    var cell = currentCell();
+    var cell = currentCell;
     var tab = cell.addTab(Qt.binding(function() {
       console.log("view.title", view.title);
       return view.title? view.title : "untitled";
     }), tabTemplate);
-    console.log("addTab", tab, tab.item);
 
     tabsMap[tabId] = tab;
 
@@ -106,8 +111,16 @@ Item {
       y: topT + (topPercent < 0.01 ? 0 : 2)
       height: bottomT - y - (bottomPercent > 0.99 ? 0 : 2)
 
-      onCurrentIndexChanged: {
-        getTab(currentIndex).item.children[0].myView.setActive();
+      property Tab currentTab: count > 0 ? getTab(currentIndex) : null
+      property View currentView: (currentTab && currentTab.item && currentTab.item.children.length) ?
+        currentTab.item.children[0] : null
+
+      property var currentMyView: currentView && currentView.myView
+      onCurrentMyViewChanged: currentMyView && updateCurrent()
+
+
+      function updateCurrent() {
+          currentView.myView.setActive();
       }
 
     }

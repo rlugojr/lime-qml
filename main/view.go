@@ -6,9 +6,10 @@ package main
 
 import (
 	"fmt"
-	"strconv"
+	"sync"
 
 	"github.com/limetext/backend"
+	"github.com/limetext/backend/log"
 	"github.com/limetext/backend/render"
 	"github.com/limetext/qml-go"
 	. "github.com/limetext/text"
@@ -22,7 +23,17 @@ type view struct {
 	bv             *backend.View
 	qv             qml.Object
 	FormattedLines *linesList
+	linesLock      sync.Mutex
 	Title          string
+
+	watchedSettings map[string]watchedSetting
+
+	// these setting: tags are merely for ease of reading, they aren't actually used
+	TabSize    int    `setting:"tab_size"`
+	SyntaxName string `setting:"syntax"`
+
+	FontSize int    `setting:"font_size"`
+	FontFace string `setting:"font_face"`
 }
 
 func newView(bv *backend.View) *view {
@@ -35,24 +46,20 @@ func newView(bv *backend.View) *view {
 		v.Title = "untitled"
 	}
 	bv.AddObserver(v)
-	bv.Settings().AddOnChange("qml.view.syntax", v.onChange)
-	bv.Settings().AddOnChange("qml.view.syntaxfile", func(name string) {
-		if name != "syntax" {
-			return
+	bv.Settings().AddOnChange("qml.view", v.onSettingChange)
+
+	watcher := newSettingsWatcher(v, bv.Settings())
+
+	watcher.watchInt("tab_size", &v.TabSize, 4)
+	watcher.watchString("syntax", &v.SyntaxName, "Plain Text", func(syn string) string {
+		if syntax := backend.GetEditor().GetSyntax(syn); syntax != nil {
+			return syntax.Name()
 		}
-		syn := bv.Settings().String("syntax", "Plain Text")
-		syntax := backend.GetEditor().GetSyntax(syn)
-		w := fe.windows[bv.Window()]
-		w.qw.Call("setSyntaxStatus", syntax.Name())
+		return syn
 	})
-	bv.Settings().AddOnChange("qml.view.tabSize", func(name string) {
-		if name != "tab_size" {
-			return
-		}
-		ts := bv.Settings().Int("tab_size", 4)
-		w := fe.windows[bv.Window()]
-		w.qw.Call("setIndentStatus", strconv.Itoa(ts))
-	})
+	watcher.watchInt("font_size", &v.FontSize, 10)
+	watcher.watchString("font_face", &v.FontFace, "Monospace")
+
 	return v
 }
 
@@ -85,6 +92,13 @@ func (v *view) Back() *backend.View {
 }
 
 func (v *view) Fix(obj qml.Object) {
+	if v.qv == obj {
+		// already Fixed?
+		return
+	}
+	if v.qv != nil {
+		log.Warn("view already has a QML view set! (%v, %v)", v.qv, obj)
+	}
 	v.qv = obj
 	obj.On("destroyed", func() {
 		if v.qv == obj {
@@ -92,13 +106,18 @@ func (v *view) Fix(obj qml.Object) {
 		}
 	})
 
+	v.linesLock.Lock()
+	defer v.linesLock.Unlock()
 	qml.RunMain(func() {
 		v.FormattedLines = NewLinesList(obj.Common().Engine(), nil)
 
+		// initialize the v.FormattedLines now
+		r := Region{A: 0, B: v.bv.Size()}
+		v.insertedNoLock(nil, r, v.bv.SubstrR(r))
+
+		fe.qmlChanged(v, &v.FormattedLines)
 	})
 
-	r := Region{A: 0, B: v.bv.Size()}
-	v.Inserted(nil, r, v.bv.SubstrR(r))
 }
 
 // SetActive is called from QML when the active tab is set to this view
@@ -110,6 +129,9 @@ func (v *view) Erased(changed_buffer Buffer, region_removed Region, data_removed
 	if v.qv == nil {
 		return
 	}
+
+	v.linesLock.Lock()
+	defer v.linesLock.Unlock()
 
 	prof := util.Prof.Enter("view.Erased")
 	defer prof.Exit()
@@ -142,6 +164,12 @@ func (v *view) Inserted(changed_buffer Buffer, region_inserted Region, data_inse
 		return
 	}
 
+	v.linesLock.Lock()
+	defer v.linesLock.Unlock()
+
+	v.insertedNoLock(changed_buffer, region_inserted, data_inserted)
+}
+func (v *view) insertedNoLock(changed_buffer Buffer, region_inserted Region, data_inserted []rune) {
 	prof := util.Prof.Enter("view.Inserted")
 	defer prof.Exit()
 
@@ -169,13 +197,17 @@ func (v *view) Inserted(changed_buffer Buffer, region_inserted Region, data_inse
 	}
 }
 
-func (v *view) onChange(name string) {
-	if name != "lime.syntax.updated" {
-		return
-	}
-	// force redraw, as the syntax regions might have changed...
-	for i := 0; i < v.FormattedLines.len(); i++ {
-		v.formatLine(i, v.FormattedLines.get(i))
+func (v *view) onSettingChange(name string) {
+	settings := v.bv.Settings()
+	fmt.Printf("SettingChanged: %s %v\n", name, settings.Get(name))
+
+	switch name {
+	case "lime.syntax.updated":
+		// force redraw, as the syntax regions might have changed...
+		for i := 0; i < v.FormattedLines.len(); i++ {
+			v.formatLine(i, v.FormattedLines.get(i))
+		}
+
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"gopkg.in/fsnotify.v1"
 
 	"github.com/limetext/backend"
@@ -44,6 +43,7 @@ type (
 		windows     map[*backend.Window]*window
 		Console     *view
 		qmlDispatch chan qmlDispatch
+		Status      string
 
 		promptWaitGroup sync.WaitGroup
 		promptResult    string
@@ -77,12 +77,15 @@ func (f *frontend) VisibleRegion(bv *backend.View) Region {
 }
 
 func (f *frontend) StatusMessage(msg string) {
-	w := f.windows[backend.GetEditor().ActiveWindow()]
-	w.qw.Call("setFrontendStatus", msg)
-	go func() {
+	f.Status = msg
+	f.qmlChanged(f, &f.Status)
+	go func(msg string) {
 		time.Sleep(5 * time.Second)
-		w.qw.Call("setFrontendStatus", "")
-	}()
+		if f.Status == msg {
+			f.Status = ""
+			f.qmlChanged(f, &f.Status)
+		}
+	}(msg)
 }
 
 const (
@@ -182,22 +185,24 @@ func (f *frontend) Inserted(changed_buffer Buffer, region_inserted Region, data_
 // mercy of how quick Qt happens to be rendering.
 // Try setting batching_enabled = false to see the effects of non-batching
 func (f *frontend) qmlBatchLoop() {
-	queue := make(map[qmlDispatch]bool)
+	queue := make([]qmlDispatch, 0, 128)
 	f.qmlDispatch = make(chan qmlDispatch, 1000)
 	for {
 		if len(queue) > 0 {
 			select {
-			case <-time.After(time.Millisecond * 20):
+			// QML likes to render at 60 fps, or 16 milliseconds per frame
+			case <-time.After(time.Millisecond * 8):
 				// Nothing happened for 20 milliseconds, so dispatch all queued changes
-				for k := range queue {
+				for _, k := range queue {
 					qml.Changed(k.value, k.field)
 				}
-				queue = make(map[qmlDispatch]bool)
+				queue = queue[0:0]
 			case d := <-f.qmlDispatch:
-				queue[d] = true
+				queue = append(queue, d)
 			}
 		} else {
-			queue[<-f.qmlDispatch] = true
+			dispatch := <-f.qmlDispatch
+			queue = append(queue, dispatch)
 		}
 	}
 }
@@ -357,7 +362,6 @@ func (f *frontend) loop() (err error) {
 	ed.Init()
 	ed.SetDefaultPath("../packages/Default")
 	ed.SetUserPath("../packages/User")
-	ed.SetClipboardFuncs(clipboard.WriteAll, clipboard.ReadAll)
 
 	// Some packages(e.g Vintageos) need available window and view at start
 	// so we need at least one window and view before loading packages.
@@ -400,6 +404,10 @@ func (f *frontend) loop() (err error) {
 		engine.On("quit", f.Quit)
 		log.Fine("setvar frontend")
 		engine.Context().SetVar("frontend", f)
+
+		qml.SetApplicationDisplayName("LimeText")
+		qml.SetWindowIcon("qml/lime.png")
+		// qml.SetDesktopFileName("qml/org.limetext.qml.LimeText.desktop")
 
 		log.Fine("loading %s", qmlWindowFile)
 		component, err = engine.LoadFile(qmlWindowFile)

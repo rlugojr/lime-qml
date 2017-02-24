@@ -14,10 +14,6 @@ ApplicationWindow {
     property var myWindow
     property string themeFolder: "../../packages/Soda/Soda Dark"
 
-    function view() {
-        return mainView.view();
-    }
-
     function addTab(tabId, view) {
         return mainView.addTab(tabId, view);
     }
@@ -32,18 +28,6 @@ ApplicationWindow {
 
     function setTabTitle(tabId, title) {
         return mainView.setTabTitle(tabId, title);
-    }
-
-    function setFrontendStatus(text) {
-        frontendStatus.text = text
-    }
-
-    function setIndentStatus(text) {
-        indentStatus.text = text
-    }
-
-    function setSyntaxStatus(text) {
-        syntaxStatus.text = text
     }
 
     menuBar: MenuBar {
@@ -159,23 +143,20 @@ ApplicationWindow {
         }
     }
 
-    property Tab currentTab: mainView.currentTab()
-    Component {
-        id: tabTemplate
-        View {}
-    }
+    property Tab currentTab: mainView.currentTab
+    property View currentView: mainView.currentView
 
     Item {
         anchors.fill: parent
         Keys.onPressed: {
-            var v = view(); if (v === undefined) return;
-            v.ctrl = (event.key == Qt.Key_Control) ? true : false;
+            var v = currentView; if (v === undefined) return;
+            if (event.key == Qt.Key_Control) v.ctrl = true;
             event.accepted = frontend.handleInput(event.text, event.key, event.modifiers)
             event.accepted = true;
         }
         Keys.onReleased: {
-            var v = view(); if (v === undefined) return;
-            v.ctrl = (event.key == Qt.Key_Control) ? false : view().ctrl;
+            var v = currentView; if (v === undefined) return;
+            if (event.key == Qt.Key_Control) v.ctrl = false;
         }
         focus: true // Focus required for Keys.onPressed
         SplitView {
@@ -212,7 +193,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 3
                 Repeater {
-                    model: statusBarSorted
+                    // model: statusBarSorted
                     delegate:
                     Label {
                         text: modelData[1]
@@ -220,21 +201,21 @@ ApplicationWindow {
                     }
                 }
                 Label {
-                    id: frontendStatus
+                    text: frontend.status
                     color: statusBar.textColor
                 }
             }
 
             Label {
-                id: indentStatus
                 color: statusBar.textColor
                 Layout.alignment: Qt.AlignRight
+                text: currentView && currentView.myView ? currentView.myView.tabSize : "0"
             }
 
             Label {
-                id: syntaxStatus
                 color: statusBar.textColor
                 Layout.alignment: Qt.AlignRight
+                text: currentView && currentView.myView ? currentView.myView.syntaxName : "0"
             }
         }
     }

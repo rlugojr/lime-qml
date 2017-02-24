@@ -10,7 +10,7 @@ Item {
   id: viewRoot
 
   property var myView
-  property int fontSize: 10
+  property int fontSize: myView.fontSize
   property string fontFace: "Monospace"
   property var cursor: Qt.IBeamCursor
   property bool ctrl: false
@@ -31,20 +31,21 @@ Item {
       z: -1
   }
 
-  Component.onCompleted: {
-    if (myView) {
-      // console.log("myView onCompleted");
-      // updateMyView();
-    }
-  }
+  // Component.onCompleted: {
+  //   if (myView) {
+  //     console.log("myView onCompleted", myView);
+  //     updateMyView();
+  //   }
+  // }
   onMyViewChanged: {
+    console.log("myViewChanged", myView);
     updateMyView();
   }
 
   function updateMyView() {
-      console.log("Buffer: updateMyView: ", myView);
       // linesModel.clear();
       if (myView) {
+        console.log("updateMyView", myView);
         myView.fix(viewRoot);
       }
   }
